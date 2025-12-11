@@ -1,4 +1,4 @@
-# Vectra: Enterprise Last-Mile Navigation Intelligence 🛰️ 📦
+# Vectra: Enterprise Last-Mile Navigation Intelligence 
 
 **Vectra** is an enterprise-grade AI platform designed to solve the "Last 100 Meters" problem in logistics. It consumes raw telemetry (GPS traces, motion states, Wi-Fi scans) to predict the optimal **Navigation Point (NP)** for vans to park and the precise **Entry Point (EP)** for drivers to access buildings.
 
