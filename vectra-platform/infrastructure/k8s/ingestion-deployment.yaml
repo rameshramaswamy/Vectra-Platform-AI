@@ -1,0 +1,147 @@
+# 1. Secret Management (API Key)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vectra-api-secrets
+type: Opaque
+stringData:
+  # In a real CI/CD pipeline, this is injected via Vault or SealedSecrets
+  api_key: "secret-key-for-phase1-enterprise"
+
+---
+# 2. Deployment (The Application)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingestion-edge
+  labels:
+    app: ingestion-edge
+    tier: frontend
+spec:
+  replicas: 3 # Start with 3 for High Availability
+  selector:
+    matchLabels:
+      app: ingestion-edge
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1       # Allow 1 extra pod during update
+      maxUnavailable: 0 # Zero downtime updates
+  template:
+    metadata:
+      labels:
+        app: ingestion-edge
+    spec:
+      # Enterprise Security: Dropping capabilities
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      
+      # HA Strategy: Don't schedule two pods on the same node (Spread across AZs)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - ingestion-edge
+              topologyKey: "kubernetes.io/hostname"
+
+      containers:
+      - name: ingestion-api
+        # Replace with your actual ECR URI
+        image: <AWS_ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/vectra-ingestion:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        
+        # Configuration
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "vectra-kafka:9092" # Internal DNS from MSK or Headless Service
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: vectra-api-secrets
+              key: api_key
+        
+        # Observability: Health Checks
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          
+        # Resource Quotas (Critical for QoS)
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m" # 0.25 vCPU
+          limits:
+            memory: "512Mi"
+            cpu: "1000m" # 1 vCPU burst
+
+---
+# 3. Service (Network Exposure)
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingestion-edge-svc
+  annotations:
+    # AWS Load Balancer Controller annotation (creates Network Load Balancer)
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+spec:
+  selector:
+    app: ingestion-edge
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8000
+  type: LoadBalancer
+
+---
+# 4. Horizontal Pod Autoscaler (Elasticity)
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: ingestion-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: ingestion-edge
+  minReplicas: 3
+  maxReplicas: 20 # Auto-scale up to 20 pods during peak delivery hours
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60 # Scale up when CPU hits 60%
+
+---
+# 5. Pod Disruption Budget (Reliability)
+# Ensures that during cluster maintenance (node upgrades), at least 2 pods remain up.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ingestion-pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: ingestion-edge

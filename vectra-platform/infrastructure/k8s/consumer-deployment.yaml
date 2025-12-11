@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: stream-consumer-sa
+  annotations:
+    # This magic annotation grants the AWS permissions to the pod
+    eks.amazonaws.com/role-arn: arn:aws:iam::<ACCOUNT_ID>:role/vectra_consumer_role
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stream-consumer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: stream-consumer
+  template:
+    metadata:
+      labels:
+        app: stream-consumer
+    spec:
+      serviceAccountName: stream-consumer-sa
+      containers:
+      - name: consumer
+        image: <ECR_URL>/vectra-consumer:latest
+        env:
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "vectra-kafka:9092"
+        # No AWS Keys needed in ENV anymore! IRSA handles it.
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"

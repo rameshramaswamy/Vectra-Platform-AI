@@ -1,0 +1,9 @@
+fastapi==0.103.0
+uvicorn[standard]==0.23.0
+cassandra-driver==3.28.0
+numpy==1.24.3
+pandas==2.0.3
+pygeohash==1.2.0
+cachetools==5.3.1
+pydantic-settings==2.0.3
+structlog==23.1.0

@@ -1,0 +1,111 @@
+version: "3.8"
+
+services:
+  # --- Infrastructure Mocks ---
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    depends_on: [zookeeper]
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  postgis:
+    image: postgis/postgis:15-3.3
+    ports: ["5432:5432"]
+    environment:
+      POSTGRES_USER: vectra
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: vectra_core
+
+  minio: # S3 Mock
+    image: minio/minio
+    ports: ["9000:9000", "9001:9001"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+
+  # --- Vectra Services ---
+  ingestion-edge:
+    build: ./services/ingestion-edge
+    ports: ["8000:8000"]
+    depends_on: [kafka]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      API_KEY: secret-key-for-phase1
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  stream-consumer:
+    build: ./services/stream-consumer
+    depends_on: [kafka, postgis, minio]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      DATABASE_URL: postgresql://vectra:password@postgis:5432/vectra_core
+      AWS_ACCESS_KEY: minioadmin
+      AWS_SECRET_KEY: minioadmin
+      S3_ENDPOINT: http://minio:9000
+      S3_BUCKET_NAME: vectra-raw-telemetry
+
+  redis:
+    image: redis:7.0-alpine
+    ports: ["6379:6379"]
+    command: redis-server --save 60 1 --loglevel warning
+
+  # MLflow Tracking Server
+  mlflow:
+    build: ./mlops/mlflow
+    ports: ["5000:5000"]
+    environment:
+      BACKEND_STORE_URI: sqlite:///mlflow.db
+      DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    volumes:
+      - ./mlflow_data:/mlflow
+
+  # Training Service
+  model-training:
+    build: ./services/model-training
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on: [mlflow]
+
+  # Inference Service
+  inference-service:
+    build: ./services/inference-service
+    ports: ["8002:8000"]
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+    depends_on: [mlflow]
+
+  # Ray Head Node (The Orchestrator)
+  ray-head:
+    image: rayproject/ray:2.6.3
+    ports:
+      - "8265:8265" # Dashboard
+      - "10001:10001"
+    command: ray start --head --dashboard-host=0.0.0.0 --port=6379
+
+  # Ray Worker (Scaling Unit)
+  ray-worker:
+    image: rayproject/ray:2.6.3
+    depends_on: [ray-head]
+    command: ray start --address=ray-head:6379
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+
+  # Wi-Fi Fingerprinting Store
+  scylla:
+    image: scylladb/scylla:5.2
+    ports: ["9042:9042"]
+    command: --smp 1 --memory 750M --overprovisioned 1 --developer-mode 1
+    volumes:
+      - ./infrastructure/cassandra/schema.cql:/docker-entrypoint-initdb.d/init.cql

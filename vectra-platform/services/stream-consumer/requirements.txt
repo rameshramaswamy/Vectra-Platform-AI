@@ -1,0 +1,10 @@
+kafka-python==2.0.2
+pandas==2.0.3
+structlog==23.1.0
+sqlalchemy==2.0.19
+geoalchemy2==0.14.0
+psycopg2-binary==2.9.7
+# New additions for Async
+asyncpg==0.28.0
+aioboto3==11.2.0
+pygeohash==1.2.0

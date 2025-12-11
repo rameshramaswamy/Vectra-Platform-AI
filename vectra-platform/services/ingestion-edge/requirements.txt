@@ -1,0 +1,6 @@
+fastapi==0.103.0
+uvicorn[standard]==0.23.0
+pydantic-settings==2.0.3
+kafka-python==2.0.2
+structlog==23.1.0        # Structured Logging
+prometheus-fastapi-instrumentator==6.1.0 # Metrics
